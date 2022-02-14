@@ -5,6 +5,34 @@ import (
 	"reflect"
 )
 
+var (
+	kindInt  reflect.Kind
+	kindUint reflect.Kind
+)
+
+func init() {
+	if arch == 64 {
+		kindInt = reflect.Int64
+		kindUint = reflect.Uint64
+	} else {
+		kindInt = reflect.Int32
+		kindUint = reflect.Uint32
+	}
+}
+
+// Alias returns the corresponding alias for int and uint.
+// Otherwise returns k unchanged.
+func Alias(k reflect.Kind) reflect.Kind {
+	switch k {
+	case reflect.Int:
+		return kindInt
+	case reflect.Uint:
+		return kindUint
+	}
+
+	return k
+}
+
 var arch = 8 * Types[reflect.Int].Align()
 
 // Arch returns the int size in bits
@@ -29,114 +57,6 @@ var Types = map[reflect.Kind]reflect.Type{
 	reflect.Complex64:  reflect.TypeOf(complex64(0)),
 	reflect.Complex128: reflect.TypeOf(complex128(0)),
 }
-
-/*
-type Relation struct {
-	Super []Kind // kinds that can hold this one (directly), in order of preference
-	Idem  []Kind // equivalent kinds
-	Sub   []Kind // kinds that this one can hold (directly), in order of preference?
-}
-
-var Kinds = map[Kind]Relation{
-	Complex128: Relation{
-		Sub: []Kind{Complex64, Float64},
-	},
-	Complex64: Relation{
-		Super: []Kind{Complex128},
-		Sub:   []Kind{Float32},
-	},
-	Float64: Relation{
-		Super: []Kind{Complex128},
-		Sub:   []Kind{Float32, Int32, Uint32},
-	},
-	Float32: Relation{
-		Super: []Kind{Float64, Complex64},
-		Sub:   []Kind{Int16, Uint16},
-	},
-	Int: Relation{
-		Idem: []Kind{Int64},
-		Sub:  []Kind{Int32, Uint32},
-	},
-	Int64: Relation{
-		Idem: []Kind{Int},
-		Sub:  []Kind{Int32, Uint32},
-	},
-	Int32: Relation{
-		Super: []Kind{Int, Int64, Float64},
-		Sub:   []Kind{Int16, Uint16},
-	},
-	Int16: Relation{
-		Super: []Kind{Int32, Float32},
-		Sub:   []Kind{Int8, Uint8},
-	},
-	Int8: Relation{
-		Super: []Kind{Int16},
-	},
-	Uint: Relation{
-		Idem: []Kind{Uint64},
-		Sub:  []Kind{Uint32},
-	},
-	Uint64: Relation{
-		Idem: []Kind{Uint},
-		Sub:  []Kind{Uint32},
-	},
-	Uint32: Relation{
-		Super: []Kind{Uint, Uint64, Int, Int64, Float64},
-		Sub:   []Kind{Uint16},
-	},
-	Uint16: Relation{
-		Super: []Kind{Uint32, Int32, Float32},
-		Sub:   []Kind{Uint8},
-	},
-	Uint8: Relation{
-		Super: []Kind{Uint16, Int16},
-	},
-}
-
-// replace numericKinds with 32 bit version, if needed
-func init() {
-	if TypeOf(0).Align() != 8 {
-		Kinds[Float64] = Relation{
-			Super: []Kind{Complex128},
-			Sub:   []Kind{Float32, Int, Int32, Uint, Uint32},
-		}
-		Kinds[Int64] = Relation{
-			Sub: []Kind{Int, Int32, Uint, Uint32},
-		}
-		Kinds[Int] = Relation{
-			Super: []Kind{Int64, Float64},
-			Idem:  []Kind{Int32},
-			Sub:   []Kind{Int16, Uint16},
-		}
-		Kinds[Int32] = Relation{
-			Super: []Kind{Int64, Float64},
-			Idem:  []Kind{Int},
-			Sub:   []Kind{Int16, Uint16},
-		}
-		Kinds[Int16] = Relation{
-			Super: []Kind{Int, Int32, Float32},
-			Sub:   []Kind{Int8, Uint8},
-		}
-		Kinds[Uint64] = Relation{
-			Sub: []Kind{Uint, Uint32},
-		}
-		Kinds[Uint] = Relation{
-			Super: []Kind{Uint64, Int64, Float64},
-			Idem:  []Kind{Uint32},
-			Sub:   []Kind{Uint16},
-		}
-		Kinds[Uint32] = Relation{
-			Super: []Kind{Uint64, Int64, Float64},
-			Idem:  []Kind{Uint},
-			Sub:   []Kind{Uint16},
-		}
-		Kinds[Uint16] = Relation{
-			Super: []Kind{Uint, Uint32, Int, Int32, Float32},
-			Sub:   []Kind{Uint8},
-		}
-	}
-}
-*/
 
 type Nature int
 
