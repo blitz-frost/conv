@@ -1,0 +1,23 @@
+- evolve the concept of conversion to that of generic function
+ - currently a conversion is a func(*dst, src) error
+  - for direct conversions src is a placeholder; for inverses it is dst
+ - this would become func(a, i0, i1, ...) (o0, o1, ..., error); where t is a placeholder
+  - this model should be able to cover both direct and inverse conversions, as well as a much wider class of concepts
+  - the placeholder must always be in the inputs, not the outputs, because it is the only way for the coder to convey intention without using reflect
+  - multiple outputs might be overkill, but one output would enable avoiding to allocate new pointers manually; also allows returning direct memory views
+ - to create an inverse conversion, a would be a pointer; the current model assumes this to be true, but the generic model would allow operating directly on slices/maps/reflect.Values
+  - the current decision tree, using the fake "generic pointers", wouldn't really work anymore -> if you treat them as generic pointers, what do you call recursively?
+   -> generic model would somehow need to be expanded and made more flexible
+- alternatively change conversions into func(src) (dst, error); avoids manual new pointer allocation
+ - inverses would still be func(*dst, src) error, because the pointer argument is the only way to convey intention
+ - in order to permit additional working data: func(src, extra) (dst, error) + func(*dst, src, extra) error
+  - for direct conversions in particular, this is the only way to recursively append to a common underlying buffer, for example
+  - inverse conversions can cheat through an intermediary, well crafted inverse (introduce work data into *dst)
+
+- handle interfaces
+ - unclear if it should be allowable to expose just the interface methods, just the concrete value underneath it, or both, inside loaded functions
+ - for inverses, concrete behaviour could be defined by putting information into the *dst argument; example: inverse([]interface{*int, *uint}, src) would load an int and a uint into an existing interface{} slice
+ 
+- integration with reflect?
+ - keep in mind that whatever form it takes, this package is meant to be a placeholder for a compile-time tool
+  -> it should not center around reflect, only work well with it when needed

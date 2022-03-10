@@ -172,6 +172,11 @@ func (x base) asTypeRec() (reflect.Type, int) {
 		elem, c := x[i:].asTypeRec()
 		i += c
 		return reflect.MapOf(key, elem), i
+	case reflect.Ptr:
+		i := 1
+		elem, c := x[i:].asTypeRec()
+		i += c
+		return reflect.PtrTo(elem), i
 	case reflect.Slice:
 		elem, c := x[1:].asTypeRec()
 		return reflect.SliceOf(elem), 1 + c
@@ -180,7 +185,7 @@ func (x base) asTypeRec() (reflect.Type, int) {
 		i := 1
 		for j := 0; j < len(fields); j++ {
 			t, c := x[i:].asTypeRec()
-			fields[i] = reflect.StructField{
+			fields[j] = reflect.StructField{
 				Name: "F" + strconv.Itoa(j),
 				Type: t,
 			}

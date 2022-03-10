@@ -40,8 +40,6 @@ type Inverse struct {
 	basic    map[uint64]implementation       // for all types with the same memory structure
 	numeric  map[reflect.Kind]implementation // basic numeric types; subset of basic
 
-	rec reflect.Value // recursion reference
-
 	srcType   reflect.Type
 	evaluator funcEval // used to check that functions conform to expected signature
 }
@@ -170,9 +168,6 @@ func (x Inverse) Build(fn interface{}) error {
 	f := reflect.MakeFunc(t, ff)
 
 	v.Set(f)
-	if x.rec.IsValid() {
-		x.rec.Set(f)
-	}
 	return nil
 }
 
@@ -186,6 +181,8 @@ func (x Inverse) Build(fn interface{}) error {
 //
 // If dstType is a defined type, fn will only be used for that specific type.
 // A few special dstTypes are recognized as follows:
+//
+// Array -> generic array conversion
 //
 // Map -> generic map conversion
 //
@@ -212,6 +209,8 @@ func (x Inverse) Load(fn interface{}) error {
 	}
 
 	switch out {
+	case arrayType:
+		x.loadGeneric(reflect.Array, v, newArrayVal)
 	case numericType:
 		x.loadGeneric(reflectNumeric, v, newNumberVal)
 	case sliceType:
@@ -225,28 +224,6 @@ func (x Inverse) Load(fn interface{}) error {
 	default:
 		x.loadSpecific(out, v)
 	}
-
-	return nil
-}
-
-// Recursion takes a pointer to a function with signature:
-//
-// func(interface{}, srcType) error
-//
-// That function may then be used as a standin for the final conversion function that will be built from this Inverse.
-// This allows definition of recursive conversions.
-func (x *Inverse) Recursion(fn interface{}) error {
-	x.evaluator.in[0] = emptyType
-	defer func() {
-		x.evaluator.in[0] = pointerType
-	}()
-
-	v, _, err := x.evaluator.evalRef(fn)
-	if err != nil {
-		return err
-	}
-
-	x.rec = v
 
 	return nil
 }
@@ -318,8 +295,6 @@ type Scheme struct {
 	generic  map[reflect.Kind]implementation // using generics
 	basic    map[uint64]implementation       // for all types with the same memory structure
 	numeric  map[reflect.Kind]implementation // basic numeric types; subset of basic
-
-	rec reflect.Value // recursion reference
 
 	dstType    reflect.Type
 	dstPtrType reflect.Type
@@ -456,9 +431,6 @@ func (x Scheme) Build(fn interface{}) error {
 	f := reflect.MakeFunc(t, ff)
 
 	v.Set(f)
-	if x.rec.IsValid() {
-		x.rec.Set(f)
-	}
 	return nil
 }
 
@@ -473,13 +445,15 @@ func (x Scheme) Build(fn interface{}) error {
 // Otherwise, fn will only be used for that specific type.
 // A few special srcTypes are recognized as follows:
 //
+// Array -> generic array conversion
+//
 // Map -> generic map conversion
 //
 // Number -> generic numeric conversion
 //
 // Pointer -> generic pointer conversion
 //
-// Slice -> generic array or slice conversion
+// Slice -> generic slice conversion
 //
 // Struct -> generic struct conversion
 //
@@ -498,11 +472,12 @@ func (x Scheme) Load(fn interface{}) error {
 	}
 
 	switch in {
+	case arrayType:
+		x.loadGeneric(reflect.Array, v, makeArrayVal)
 	case numericType:
 		x.loadGeneric(reflectNumeric, v, makeNumberVal)
 	case sliceType:
 		x.loadGeneric(reflect.Slice, v, makeSliceVal)
-		x.generic[reflect.Array] = x.generic[reflect.Slice]
 	case mapType:
 		x.loadGeneric(reflect.Map, v, makeMapVal)
 	case pointerType:
@@ -512,28 +487,6 @@ func (x Scheme) Load(fn interface{}) error {
 	default:
 		x.loadSpecific(in, v)
 	}
-
-	return nil
-}
-
-// Recursion takes a pointer to a function with signature:
-//
-// func(*dstType, interface{}) error
-//
-// That function may then be used as a standin for the final conversion function that will be built from this Scheme.
-// This allows definition of recursive conversions.
-func (x *Scheme) Recursion(fn interface{}) error {
-	x.evaluator.in[1] = emptyType
-	defer func() {
-		x.evaluator.in[1] = nil
-	}()
-
-	v, _, err := x.evaluator.evalRef(fn)
-	if err != nil {
-		return err
-	}
-
-	x.rec = v
 
 	return nil
 }
@@ -761,6 +714,7 @@ func (x funcEval) evalWith(v interface{}, check func(interface{}) (reflect.Value
 }
 
 var (
+	arrayType   = reflect.TypeOf(Array{})
 	emptyType   = reflect.TypeOf(new(interface{})).Elem()
 	errorType   = reflect.TypeOf(new(error)).Elem()
 	mapType     = reflect.TypeOf(Map{})
@@ -778,6 +732,7 @@ func init() {
 	}
 	simpleTypes[reflect.Bool] = reflect.TypeOf(false)
 	simpleTypes[reflect.String] = reflect.TypeOf("")
+	simpleTypes[reflect.UnsafePointer] = reflect.TypeOf(new(unsafe.Pointer)).Elem()
 }
 
 // convBasic converts args[1] to args[0] through direct pointer reinterpretation
@@ -813,7 +768,7 @@ type implementation = func([]reflect.Value) []reflect.Value
 var numericFunc = reflect.ValueOf(numeric.Convert)
 
 var (
-	errInvalid    = errors.New("invalid conversion")
-	errValInvalid = reflect.ValueOf(errInvalid)
+	ErrInvalid    = errors.New("invalid conversion")
+	errValInvalid = reflect.ValueOf(ErrInvalid)
 	errValNone    = reflect.Zero(errorType)
 )
