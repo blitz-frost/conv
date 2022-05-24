@@ -295,6 +295,7 @@ type Scheme struct {
 	generic  map[reflect.Kind]implementation // using generics
 	basic    map[uint64]implementation       // for all types with the same memory structure
 	numeric  map[reflect.Kind]implementation // basic numeric types; subset of basic
+	nilFunc  implementation                  // called when source value is nil
 
 	dstType    reflect.Type
 	dstPtrType reflect.Type
@@ -311,6 +312,7 @@ func MakeScheme(v any) Scheme {
 		generic:    make(map[reflect.Kind]implementation),
 		basic:      make(map[uint64]implementation),
 		numeric:    make(map[reflect.Kind]implementation),
+		nilFunc:    convInvalid,
 		dstType:    dstType,
 		dstPtrType: reflect.PtrTo(dstType),
 		evaluator:  makeFuncEvalScheme(v),
@@ -352,6 +354,10 @@ func (x Scheme) Build(fn any) error {
 
 	var ff func([]reflect.Value) []reflect.Value
 	ff = func(args []reflect.Value) []reflect.Value {
+		if args[1].IsNil() {
+			return x.nilFunc(args)
+		}
+
 		src := args[1].Elem() // arg is seen as any by f
 		args[1] = src
 		srcType := src.Type()
@@ -457,14 +463,24 @@ func (x Scheme) Build(fn any) error {
 //
 // Struct -> generic struct conversion
 //
+// Nil -> nil value handling; panics by default
+//
 // Multiple functions may be loaded for the same source type, overwriting the previous one.
-func (x Scheme) Load(fn any) error {
+func (x *Scheme) Load(fn any) error {
 	v, t, err := x.evaluator.eval(fn)
 	if err != nil {
 		return err
 	}
 
 	in := t.In(1)
+
+	if in == nilType {
+		x.nilFunc = func(args []reflect.Value) []reflect.Value {
+			args[1] = reflect.ValueOf(Nil{})
+			return v.Call(args)
+		}
+		return nil
+	}
 
 	if isBasic(in) {
 		x.loadBasic(in, v, true)
@@ -718,6 +734,7 @@ var (
 	emptyType   = reflect.TypeOf(new(any)).Elem()
 	errorType   = reflect.TypeOf(new(error)).Elem()
 	mapType     = reflect.TypeOf(Map{})
+	nilType     = reflect.TypeOf(Nil{})
 	numericType = reflect.TypeOf(Number{})
 	pointerType = reflect.TypeOf(Pointer{})
 	sliceType   = reflect.TypeOf(Slice{})

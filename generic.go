@@ -202,6 +202,10 @@ func (x MapIter) Value() any {
 	return x.v.Value().Interface()
 }
 
+// Nil can be used to define explicit handling of nil source values in schemes.
+// Cannot be used by inverse schemes.
+type Nil struct{}
+
 // A Number represents a generic numeric type.
 type Number struct {
 	v reflect.Value // underlying value
