@@ -46,7 +46,7 @@ type Inverse struct {
 
 // MakeInverse returns an empty Inverse scheme to convert from v's type.
 // Panics if v is nil.
-func MakeInverse(v interface{}) Inverse {
+func MakeInverse(v any) Inverse {
 	return Inverse{
 		cache:     make(map[reflect.Type]implementation),
 		specific:  make(map[reflect.Type]implementation),
@@ -61,7 +61,7 @@ func MakeInverse(v interface{}) Inverse {
 // Build packages all currently loaded conversion functions into a single function.
 // fn must be a pointer to a function with signature:
 //
-// func(interface{}, srcType) error
+// func(any, srcType) error
 //
 // where srcType is the same as the one in loaded functions.
 //
@@ -72,8 +72,8 @@ func MakeInverse(v interface{}) Inverse {
 // For a given dstType, if multiple conversions are available, the order of preference is: specific > generic > basic > closest numeric substitute.
 //
 // Finally, if no explicit conversion has been defined for a particular dstType-srcType pair, but srcType can be implicitly converted (as defined by this package) to dstType, the implicit conversion is used.
-func (x Inverse) Build(fn interface{}) error {
-	x.evaluator.in[0] = emptyType // we explicitly want interface{} input for the packaged function
+func (x Inverse) Build(fn any) error {
+	x.evaluator.in[0] = emptyType // we explicitly want any input for the packaged function
 	defer func() {
 		x.evaluator.in[0] = pointerType
 	}()
@@ -91,7 +91,7 @@ func (x Inverse) Build(fn interface{}) error {
 
 	var ff func([]reflect.Value) []reflect.Value
 	ff = func(args []reflect.Value) []reflect.Value {
-		dstPtr := args[0].Elem() // arg is seen as interface{} by f
+		dstPtr := args[0].Elem() // arg is seen as any by f
 		dst := dstPtr.Elem()
 		dstType := dst.Type()
 		args[0] = dstPtr
@@ -195,7 +195,7 @@ func (x Inverse) Build(fn interface{}) error {
 // Struct -> generic struct conversion
 //
 // Multiple functions may be loaded for the same destination type, overwriting the previous one.
-func (x Inverse) Load(fn interface{}) error {
+func (x Inverse) Load(fn any) error {
 	v, t, err := x.evaluator.eval(fn)
 	if err != nil {
 		return err
@@ -303,7 +303,7 @@ type Scheme struct {
 
 // MakeScheme returns an empty Scheme to convert to v's type.
 // Panics if v is nil.
-func MakeScheme(v interface{}) Scheme {
+func MakeScheme(v any) Scheme {
 	dstType := reflect.TypeOf(v)
 	return Scheme{
 		cache:      make(map[reflect.Type]implementation),
@@ -320,7 +320,7 @@ func MakeScheme(v interface{}) Scheme {
 // Build packages all currently loaded conversion functions into a single function.
 // fn must be a pointer to a function with signature:
 //
-// func(*dstType, interface{}) error
+// func(*dstType, any) error
 //
 // where dstType is the same as the one in loaded functions.
 //
@@ -331,8 +331,8 @@ func MakeScheme(v interface{}) Scheme {
 // For a given srcType, if multiple conversions are available, the order of preference is: specific > generic > basic > closest numeric substitute.
 //
 // Finally, if no explicit conversion has been defined for a particular dstType-srcType pair, but srcType can be implicitly converted (as defined by this package) to dstType, the implicit conversion is used.
-func (x Scheme) Build(fn interface{}) error {
-	x.evaluator.in[1] = emptyType // we explicitly want interface{} input for the packaged function
+func (x Scheme) Build(fn any) error {
+	x.evaluator.in[1] = emptyType // we explicitly want any input for the packaged function
 	defer func() {
 		x.evaluator.in[1] = nil
 	}()
@@ -352,7 +352,7 @@ func (x Scheme) Build(fn interface{}) error {
 
 	var ff func([]reflect.Value) []reflect.Value
 	ff = func(args []reflect.Value) []reflect.Value {
-		src := args[1].Elem() // arg is seen as interface{} by f
+		src := args[1].Elem() // arg is seen as any by f
 		args[1] = src
 		srcType := src.Type()
 
@@ -458,7 +458,7 @@ func (x Scheme) Build(fn interface{}) error {
 // Struct -> generic struct conversion
 //
 // Multiple functions may be loaded for the same source type, overwriting the previous one.
-func (x Scheme) Load(fn interface{}) error {
+func (x Scheme) Load(fn any) error {
 	v, t, err := x.evaluator.eval(fn)
 	if err != nil {
 		return err
@@ -553,7 +553,7 @@ func (x Scheme) loadSpecific(t reflect.Type, convFunc reflect.Value) {
 
 // funcVal returns a function value from v.
 // v must be a function or point to one.
-func funcVal(v interface{}) (reflect.Value, error) {
+func funcVal(v any) (reflect.Value, error) {
 	if v == nil {
 		return reflect.Value{}, errors.New("nil input")
 	}
@@ -567,7 +567,7 @@ func funcVal(v interface{}) (reflect.Value, error) {
 }
 
 // funcRefVal is like valFunc, but also checks that the function value be settable.
-func funcRefVal(v interface{}) (reflect.Value, error) {
+func funcRefVal(v any) (reflect.Value, error) {
 	o, err := funcVal(v)
 	if err != nil {
 		return o, err
@@ -607,7 +607,7 @@ type funcEval struct {
 }
 
 // makeFuncEvalInverse returns a funcEval for a conversion function from v's type.
-func makeFuncEvalInverse(v interface{}) funcEval {
+func makeFuncEvalInverse(v any) funcEval {
 	return funcEval{
 		in:  []reflect.Type{pointerType, reflect.TypeOf(v)},
 		out: []reflect.Type{errorType},
@@ -615,7 +615,7 @@ func makeFuncEvalInverse(v interface{}) funcEval {
 }
 
 // makeFuncEvalScheme returns a funcEval for a conversion function to v's type.
-func makeFuncEvalScheme(v interface{}) funcEval {
+func makeFuncEvalScheme(v any) funcEval {
 	return funcEval{
 		in:  []reflect.Type{reflect.PtrTo(reflect.TypeOf(v)), nil},
 		out: []reflect.Type{errorType},
@@ -678,11 +678,11 @@ func (x funcEval) checkType(t reflect.Type, side funcEvalSide) error {
 	return nil
 }
 
-func (x funcEval) eval(v interface{}) (reflect.Value, reflect.Type, error) {
+func (x funcEval) eval(v any) (reflect.Value, reflect.Type, error) {
 	return x.evalWith(v, funcVal)
 }
 
-func (x funcEval) evalRef(v interface{}) (reflect.Value, reflect.Type, error) {
+func (x funcEval) evalRef(v any) (reflect.Value, reflect.Type, error) {
 	return x.evalWith(v, funcRefVal)
 }
 
@@ -699,7 +699,7 @@ func (x funcEval) evalValue(v reflect.Value) (reflect.Type, error) {
 	return t, nil
 }
 
-func (x funcEval) evalWith(v interface{}, check func(interface{}) (reflect.Value, error)) (reflect.Value, reflect.Type, error) {
+func (x funcEval) evalWith(v any, check func(any) (reflect.Value, error)) (reflect.Value, reflect.Type, error) {
 	oval, err := check(v)
 	if err != nil {
 		return reflect.Value{}, nil, err
@@ -715,7 +715,7 @@ func (x funcEval) evalWith(v interface{}, check func(interface{}) (reflect.Value
 
 var (
 	arrayType   = reflect.TypeOf(Array{})
-	emptyType   = reflect.TypeOf(new(interface{})).Elem()
+	emptyType   = reflect.TypeOf(new(any)).Elem()
 	errorType   = reflect.TypeOf(new(error)).Elem()
 	mapType     = reflect.TypeOf(Map{})
 	numericType = reflect.TypeOf(Number{})

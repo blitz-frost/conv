@@ -144,7 +144,7 @@ func RateConversion(dst, src reflect.Kind) int {
 // Converts src to dst, as per the rules of this package.
 // dst must be a pointer to a numeric kind.
 // src must be a numeric kind that can be converted losslessly to dst.
-func Convert(dst, src interface{}) error {
+func Convert(dst, src any) error {
 	if dst == nil || src == nil {
 		return errors.New("nil input")
 	}

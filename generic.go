@@ -60,7 +60,7 @@ func (x Array) Elem() reflect.Type {
 }
 
 // Index returns the value at index i.
-func (x Array) Index(i int) interface{} {
+func (x Array) Index(i int) any {
 	return x.v.Index(i).Interface()
 }
 
@@ -69,15 +69,15 @@ func (x Array) Len() int {
 }
 
 // New returns a new pointer to the element type.
-func (x Array) New() interface{} {
+func (x Array) New() any {
 	return reflect.New(x.elem).Interface()
 }
 
-func (x *Array) Set(i int, v interface{}) {
+func (x *Array) Set(i int, v any) {
 	x.SetValue(i, reflect.ValueOf(v))
 }
 
-func (x *Array) SetPtr(i int, v interface{}) {
+func (x *Array) SetPtr(i int, v any) {
 	x.SetValue(i, reflect.ValueOf(v).Elem())
 }
 
@@ -101,16 +101,16 @@ func (x *Array) UnsafeSet(p unsafe.Pointer, length int) {
 // ArrayInterface facilitates code factoring.
 type ArrayInterface interface {
 	Elem() reflect.Type
-	Index(int) interface{}
+	Index(int) any
 	Len() int
-	New() interface{}
+	New() any
 	Unsafe() uintptr
 }
 
 type ArrayPointerInterface interface {
 	ArrayInterface
-	Set(int, interface{})
-	SetPtr(int, interface{})
+	Set(int, any)
+	SetPtr(int, any)
 	UnsafeSet(unsafe.Pointer, int)
 }
 
@@ -147,11 +147,11 @@ func (x *Map) Clear() {
 	x.v.Set(reflect.MakeMap(x.v.Type()))
 }
 
-func (x *Map) Delete(key interface{}) {
+func (x *Map) Delete(key any) {
 	x.v.SetMapIndex(reflect.ValueOf(key), reflect.Zero(x.v.Type().Elem()))
 }
 
-func (x Map) Key(k interface{}) interface{} {
+func (x Map) Key(k any) any {
 	return x.v.MapIndex(reflect.ValueOf(k)).Interface()
 }
 
@@ -159,11 +159,11 @@ func (x Map) Len() int {
 	return x.v.Len()
 }
 
-func (x Map) NewKey() interface{} {
+func (x Map) NewKey() any {
 	return reflect.New(x.key).Interface()
 }
 
-func (x Map) NewValue() interface{} {
+func (x Map) NewValue() any {
 	return reflect.New(x.elem).Interface()
 }
 
@@ -171,11 +171,11 @@ func (x Map) Range() MapIter {
 	return MapIter{x.v.MapRange()}
 }
 
-func (x *Map) Set(key, val interface{}) {
+func (x *Map) Set(key, val any) {
 	x.SetValue(reflect.ValueOf(key), reflect.ValueOf(val))
 }
 
-func (x *Map) SetPtr(key, val interface{}) {
+func (x *Map) SetPtr(key, val any) {
 	x.SetValue(reflect.ValueOf(key).Elem(), reflect.ValueOf(val).Elem())
 }
 
@@ -188,7 +188,7 @@ type MapIter struct {
 	v *reflect.MapIter
 }
 
-func (x MapIter) Key() interface{} {
+func (x MapIter) Key() any {
 	return x.v.Key().Interface()
 }
 
@@ -198,7 +198,7 @@ func (x MapIter) Next() bool {
 	return x.v.Next()
 }
 
-func (x MapIter) Value() interface{} {
+func (x MapIter) Value() any {
 	return x.v.Value().Interface()
 }
 
@@ -215,11 +215,11 @@ func newNumberVal(v reflect.Value) reflect.Value {
 	return reflect.ValueOf(&Number{v})
 }
 
-func (x *Number) Addr() interface{} {
+func (x *Number) Addr() any {
 	return x.v.Addr().Interface()
 }
 
-func (x *Number) Set(v interface{}) {
+func (x *Number) Set(v any) {
 	x.v.Set(reflect.ValueOf(v))
 }
 
@@ -239,7 +239,7 @@ func (x *Number) UnsafeSet(p unsafe.Pointer) {
 	unsafeSet(x.v, p)
 }
 
-func (x Number) Value() interface{} {
+func (x Number) Value() any {
 	return x.v.Interface()
 }
 
@@ -263,23 +263,23 @@ func newPointerVal(v reflect.Value) reflect.Value {
 }
 
 // Elem returns the value being pointed at.
-func (x Pointer) Elem() interface{} {
+func (x Pointer) Elem() any {
 	return x.v.Elem().Interface()
 }
 
 // ElemSet sets the value being pointed at.
-func (x *Pointer) ElemSet(v interface{}) {
+func (x *Pointer) ElemSet(v any) {
 	x.v.Elem().Set(reflect.ValueOf(v))
 }
 
 // New returns a new pointer of the same type.
-func (x Pointer) New() interface{} {
+func (x Pointer) New() any {
 	return reflect.New(x.v.Type().Elem()).Interface()
 }
 
 // Set assigns the pointer value.
 // v must be the same type of pointer.
-func (x *Pointer) Set(v interface{}) {
+func (x *Pointer) Set(v any) {
 	x.v.Set(reflect.ValueOf(v))
 }
 
@@ -295,7 +295,7 @@ func (x *Pointer) UnsafeSet(p unsafe.Pointer) {
 }
 
 // Value returns the pointer itself.
-func (x Pointer) Value() interface{} {
+func (x Pointer) Value() any {
 	return x.v.Interface()
 }
 
@@ -322,11 +322,11 @@ func newSliceVal(v reflect.Value) reflect.Value {
 	return reflect.ValueOf(&x)
 }
 
-func (x *Slice) Append(v ...interface{}) {
+func (x *Slice) Append(v ...any) {
 	x.v.Set(reflect.AppendSlice(x.v, reflect.ValueOf(v)))
 }
 
-func (x *Slice) AppendPtr(v interface{}) {
+func (x *Slice) AppendPtr(v any) {
 	x.v.Set(reflect.Append(x.v, reflect.ValueOf(v).Elem()))
 }
 
@@ -339,7 +339,7 @@ func (x Slice) Elem() reflect.Type {
 }
 
 // Index returns the value at index i.
-func (x Slice) Index(i int) interface{} {
+func (x Slice) Index(i int) any {
 	return x.v.Index(i).Interface()
 }
 
@@ -361,15 +361,15 @@ func (x *Slice) LenSet(n int) {
 }
 
 // New returns a new pointer to the element type.
-func (x Slice) New() interface{} {
+func (x Slice) New() any {
 	return reflect.New(x.elem).Interface()
 }
 
-func (x *Slice) Set(i int, v interface{}) {
+func (x *Slice) Set(i int, v any) {
 	x.SetValue(i, reflect.ValueOf(v))
 }
 
-func (x *Slice) SetPtr(i int, v interface{}) {
+func (x *Slice) SetPtr(i int, v any) {
 	x.SetValue(i, reflect.ValueOf(v).Elem())
 }
 
@@ -404,11 +404,11 @@ func newStructVal(v reflect.Value) reflect.Value {
 	return reflect.ValueOf(&Struct{v})
 }
 
-func (x Struct) Field(name string) interface{} {
+func (x Struct) Field(name string) any {
 	return x.v.FieldByName(name).Interface()
 }
 
-func (x Struct) FieldNew(name string) interface{} {
+func (x Struct) FieldNew(name string) any {
 	sf, ok := x.v.Type().FieldByName(name)
 	if !ok {
 		panic("invalid field")
@@ -419,12 +419,12 @@ func (x Struct) FieldNew(name string) interface{} {
 
 // FieldSet sets the value of the named field.
 // Panics if the field is unexported.
-func (x *Struct) FieldSet(field string, v interface{}) {
+func (x *Struct) FieldSet(field string, v any) {
 	val := reflect.ValueOf(v)
 	x.v.FieldByName(field).Set(val)
 }
 
-func (x *Struct) FieldSetPtr(field string, v interface{}) {
+func (x *Struct) FieldSetPtr(field string, v any) {
 	val := reflect.ValueOf(v).Elem()
 	x.v.FieldByName(field).Set(val)
 }
@@ -439,11 +439,11 @@ func (x Struct) RangeEx() *StructIterEx {
 	return newStructIterEx(x.v)
 }
 
-func (x *Struct) Set(v interface{}) {
+func (x *Struct) Set(v any) {
 	x.v.Set(reflect.ValueOf(v))
 }
 
-func (x *Struct) SetPtr(v interface{}) {
+func (x *Struct) SetPtr(v any) {
 	x.v.Set(reflect.ValueOf(v).Elem())
 }
 
@@ -513,18 +513,18 @@ func (x *StructIter) Next() bool {
 }
 
 // New returns a pointer to the field's type.
-func (x StructIter) New() interface{} {
+func (x StructIter) New() any {
 	return reflect.New(x.field.Type).Interface()
 }
 
 // Set sets the value of the field.
 // Panics if the struct is not addressable.
-func (x StructIter) Set(v interface{}) {
+func (x StructIter) Set(v any) {
 	val := reflect.ValueOf(v)
 	x.v.FieldByIndex(x.index[x.i]).Set(val)
 }
 
-func (x StructIter) SetPtr(v interface{}) {
+func (x StructIter) SetPtr(v any) {
 	val := reflect.ValueOf(v).Elem()
 	x.v.FieldByIndex(x.index[x.i]).Set(val)
 }
@@ -533,7 +533,7 @@ func (x StructIter) Tag() StructTag {
 	return x.field.Tag
 }
 
-func (x StructIter) Value() interface{} {
+func (x StructIter) Value() any {
 	return x.v.FieldByIndex(x.index[x.i]).Interface()
 }
 
@@ -580,15 +580,15 @@ func (x *StructIterEx) Next() bool {
 	return true
 }
 
-func (x StructIterEx) New() interface{} {
+func (x StructIterEx) New() any {
 	return reflect.New(x.fieldInfo.Type).Interface()
 }
 
-func (x StructIterEx) Set(v interface{}) {
+func (x StructIterEx) Set(v any) {
 	x.SetValue(reflect.ValueOf(v))
 }
 
-func (x StructIterEx) SetPtr(v interface{}) {
+func (x StructIterEx) SetPtr(v any) {
 	x.SetValue(reflect.ValueOf(v).Elem())
 }
 
@@ -606,7 +606,7 @@ func (x StructIterEx) Tag() StructTag {
 	return x.fieldInfo.Tag
 }
 
-func (x StructIterEx) Value() interface{} {
+func (x StructIterEx) Value() any {
 	// use conventional method for exported fields
 	if x.fieldInfo.PkgPath == "" {
 		return x.field.Interface()
