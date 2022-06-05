@@ -1,791 +1,280 @@
-// Package conv defines a framework for Go value conversions. It does not strictly follow the Go specification.
+// Package conv defines a framework for conversions between Go types. It is meant to ultimately serve as a compile time tool.
 //
-// All bool, string and numeric types are "simple types".
-// All pointer, array, slice, struct, map, channel and function types are "composite types".
+// This package explicitly imports all "reflect" identifiers.
 //
-// A type is a "base type" if it is either a built-in simple type, or an undefined composite type of only built-in simple types.
-//
-// "A -> B" will be used to denote that type A is directly convertible to type B.
-// "A <-> B" will be used to denote that types A and B are directly convertible between themselves.
-//
-// Implicit direct conversions
-//
-// All types are directly convertible to other types that have the same underlying memory structure.
-// All simple types are directly convertible to those with the same underlying built-in simple type.
-// All composite types are directly convertible to those with the same equivalent underlying structure.
-// A conversion that relies on this in-memory equivalence is a "basic conversion".
-//
-// Slice/array types are convertible to array/slice types, if the source element type is convertible to the destination element type. TODO
-//
-// String types are mutually convertible to byte slice/array types. Arrays involved in implicit conversions must have the appropriate size for their conversion counterpart, otherwise these conversions panic. TODO
-//
-// Finally, all numeric types are directly convertible to other numeric types that can hold the same information losslessly. That is to say: uint -> int -> float -> complex (of appropriate size).
+// Builder, Scheme and Library are the core types of this package.
 package conv
 
 import (
 	"errors"
-	"fmt"
-	"reflect"
-	"unsafe"
-
-	"github.com/blitz-frost/conv/numeric"
+	. "reflect"
+	"sync"
 )
 
-// An Inverse is used to package conversions from a single source type to various destination types.
-type Inverse struct {
-	// conversion functions
-	cache    map[reflect.Type]implementation // cache types evaluated at conversion time for rapid subsequent resolution; this is mostly significant for basic conversions
-	specific map[reflect.Type]implementation // specific to certain types
-	generic  map[reflect.Kind]implementation // using generics
-	basic    map[uint64]implementation       // for all types with the same memory structure
-	numeric  map[reflect.Kind]implementation // basic numeric types; subset of basic
+var ErrInvalid = errors.New("invalid conversion")
 
-	srcType   reflect.Type
-	evaluator funcEval // used to check that functions conform to expected signature
+// A Builder is used to obtain conversion functions for a particular type. It must return false if it cannot handle the input type.
+// Multiple Builders should be used together, each one covering a different case, making code more modular.
+// The Converter and Inverter types defined in this package are examples for the generic T.
+type Builder[T any] func(Type) (T, bool)
+
+// Converter is the standard conversion function type.
+// Uses reflect.Value (instead of any) as the reflect package is very likely to be needed inside the function.
+type Converter[T any] func(Value) (T, error)
+
+// Inverter is the standard inversion function type.
+type Inverter[T any] func(T) (Value, error)
+
+// A Library wraps a Builder, caching build results for future reuse.
+// This favors complex Builders that return optimized functions for a particular type, as the build time must only be spent once for each unique encountered type.
+// Safe for concurrent use.
+type Library[T any] struct {
+	m   map[Type]T
+	mux sync.RWMutex
+
+	b    Builder[T]
+	zero T // default value to use, if one cannot be built
 }
 
-// MakeInverse returns an empty Inverse scheme to convert from v's type.
-// Panics if v is nil.
-func MakeInverse(v any) Inverse {
-	return Inverse{
-		cache:     make(map[reflect.Type]implementation),
-		specific:  make(map[reflect.Type]implementation),
-		generic:   make(map[reflect.Kind]implementation),
-		basic:     make(map[uint64]implementation),
-		numeric:   make(map[reflect.Kind]implementation),
-		srcType:   reflect.TypeOf(v),
-		evaluator: makeFuncEvalInverse(v),
+// "zero" will be used as default when the wrapped builder doesn't cover a particular type.
+func NewLibrary[T any](b Builder[T], zero T) *Library[T] {
+	return &Library[T]{
+		m:    make(map[Type]T),
+		b:    b,
+		zero: zero,
 	}
 }
 
-// Build packages all currently loaded conversion functions into a single function.
-// fn must be a pointer to a function with signature:
-//
-// func(any, srcType) error
-//
-// where srcType is the same as the one in loaded functions.
-//
-// On successful build, fn can be used to convert from the source type.
-//
-// If a basic numeric type conversion is defined, all other basic numeric types that can be extrapolated losslesly from them are automatically filled in.
-//
-// For a given dstType, if multiple conversions are available, the order of preference is: specific > generic > basic > closest numeric substitute.
-//
-// Finally, if no explicit conversion has been defined for a particular dstType-srcType pair, but srcType can be implicitly converted (as defined by this package) to dstType, the implicit conversion is used.
-func (x Inverse) Build(fn any) error {
-	x.evaluator.in[0] = emptyType // we explicitly want any input for the packaged function
-	defer func() {
-		x.evaluator.in[0] = pointerType
-	}()
+// Get returns the cached function for type "t". If this is the first time that the type is encountered, builds and caches the return value first.
+func (x *Library[T]) Get(t Type) T {
+	x.mux.RLock()
 
-	v, t, err := x.evaluator.evalRef(fn)
+	if o, ok := x.m[t]; ok {
+		x.mux.RUnlock()
+		return o
+	}
+
+	x.mux.RUnlock()
+	x.mux.Lock()
+
+	// check again, in case another goroutine locked just before this one, for the same reason
+	if o, ok := x.m[t]; ok {
+		x.mux.Unlock()
+		return o
+	}
+
+	o, ok := x.b(t)
+	if !ok {
+		o = x.zero
+	}
+	x.m[t] = o
+
+	x.mux.Unlock()
+
+	return o
+}
+
+// A Conversion is a Library specialized in standard Converter functions (from multiple types to a specific one).
+// Users can define their own Converter and Conversion variants, if the standard ones don't suit needs.
+type Conversion[T any] Library[Converter[T]]
+
+func NewConversion[T any](b Builder[Converter[T]]) *Conversion[T] {
+	return (*Conversion[T])(NewLibrary[Converter[T]](b, converterInvalid[T]))
+}
+
+func (x *Conversion[T]) Call(v any) (T, error) {
+	f := (*Library[Converter[T]])(x).Get(TypeOf(v))
+	return f(ValueOf(v))
+}
+
+// A Inversion is a Library specialized in standard Inverter functions (from one specific type to multiple others).
+type Inversion[T any] Library[Inverter[T]]
+
+func NewInversion[T any](b Builder[Inverter[T]]) *Inversion[T] {
+	return (*Inversion[T])(NewLibrary[Inverter[T]](b, inverterInvalid[T]))
+}
+
+// As is the equivalent of the Conversion.Call method, but Go methods cannot currently take type parameters.
+func As[S any, T any](x *Inversion[T], v T) (S, error) {
+	t := TypeOf((*S)(nil)).Elem()
+	f := (*Library[Inverter[T]])(x).Get(t)
+	ov, err := f(v)
 	if err != nil {
-		return err
-	}
-
-	x.fill()
-
-	if len(x.specific) == 0 && len(x.generic) == 0 && len(x.basic) == 0 {
-		return errors.New("empty inverse")
-	}
-
-	var ff func([]reflect.Value) []reflect.Value
-	ff = func(args []reflect.Value) []reflect.Value {
-		dstPtr := args[0].Elem() // arg is seen as any by f
-		dst := dstPtr.Elem()
-		dstType := dst.Type()
-		args[0] = dstPtr
-
-		if cache, ok := x.cache[dstType]; ok {
-			return cache(args)
-		}
-
-		if specific, ok := x.specific[dstType]; ok {
-			x.cache[dstType] = specific
-			return specific(args)
-		}
-
-		k := dst.Kind()
-		kGen := k
-		if _, ok := numeric.Types[kGen]; ok {
-			kGen = reflectNumeric
-		}
-		if generic, ok := x.generic[kGen]; ok {
-			x.cache[dstType] = generic
-			return generic(args)
-		}
-
-		h := baseOf(dstType).hash()
-		if basic, ok := x.basic[h]; ok {
-			x.cache[dstType] = basic
-			return basic(args)
-		}
-
-		if numType, dstIsNum := numeric.Types[k]; dstIsNum {
-			var (
-				best       implementation
-				bestRating = -1
-				bestKind   reflect.Kind
-			)
-			for kk, fn := range x.numeric {
-				r := numeric.RateConversion(k, kk)
-				if r >= 0 && (r < bestRating || bestRating == -1) {
-					bestKind = kk
-					bestRating = r
-					best = fn
-				}
-			}
-
-			if bestRating > -1 {
-				bestType := numeric.Types[bestKind]
-				numPtrType := reflect.PtrTo(bestType)
-				funcType := reflect.FuncOf([]reflect.Type{numPtrType, x.srcType}, []reflect.Type{errorType}, false)
-				convFunc := reflect.MakeFunc(funcType, func(args []reflect.Value) []reflect.Value {
-					bestPtr := reflect.New(bestType)
-					dstPtr := args[0]
-					args[0] = bestPtr
-					err := best(args)
-
-					args[1] = bestPtr.Elem()
-					args[0] = dstPtr
-					convNumeric(args)
-
-					return err
-				})
-				x.loadBasic(numType, convFunc, false)
-				basic := x.basic[h]
-				x.cache[dstType] = basic
-				return basic(args)
-			} else {
-				x.basic[h] = convInvalid
-			}
-		}
-
-		x.cache[dstType] = convInvalid
-		return convInvalid(args)
-	}
-
-	f := reflect.MakeFunc(t, ff)
-
-	v.Set(f)
-	return nil
-}
-
-// Load registers a function to be used for conversion from a source type.
-// fn must be a function with signature:
-//
-// func(*dstType, srcType) error
-//
-// If dstType is an undefined simple type, or an undefined composed type of only undefined types, fn will serve as conversion function for all equivalent types.
-// int and uint are treated as equivalent to their respective aliases (int32/int64 and uint32/uint64). Loading one of these types will overwrite its alias.
-//
-// If dstType is a defined type, fn will only be used for that specific type.
-// A few special dstTypes are recognized as follows:
-//
-// Array -> generic array conversion
-//
-// Map -> generic map conversion
-//
-// Number -> generic numeric conversion
-//
-// Pointer -> generic pointer conversion
-//
-// Slice -> generic slice conversion
-//
-// Struct -> generic struct conversion
-//
-// Multiple functions may be loaded for the same destination type, overwriting the previous one.
-func (x Inverse) Load(fn any) error {
-	v, t, err := x.evaluator.eval(fn)
-	if err != nil {
-		return err
-	}
-
-	out := t.In(0).Elem()
-
-	if isBasic(out) {
-		x.loadBasic(out, v, true)
-		return nil
-	}
-
-	switch out {
-	case arrayType:
-		x.loadGeneric(reflect.Array, v, newArrayVal)
-	case numericType:
-		x.loadGeneric(reflectNumeric, v, newNumberVal)
-	case sliceType:
-		x.loadGeneric(reflect.Slice, v, newSliceVal)
-	case mapType:
-		x.loadGeneric(reflect.Map, v, newMapVal)
-	case pointerType:
-		x.loadGeneric(reflect.Ptr, v, newPointerVal)
-	case structType:
-		x.loadGeneric(reflect.Struct, v, newStructVal)
-	default:
-		x.loadSpecific(out, v)
-	}
-
-	return nil
-}
-
-func (x Inverse) fill() {
-	srcBase := baseOf(x.srcType)
-	if !srcBase.isConcrete() {
-		return
-	}
-
-	h := srcBase.hash()
-	if _, ok := x.basic[h]; ok {
-		return
-	}
-
-	t := srcBase.asType()
-	funcType := reflect.FuncOf([]reflect.Type{reflect.PtrTo(t), x.srcType}, []reflect.Type{errorType}, false)
-	funcVal := reflect.MakeFunc(funcType, convBasic)
-
-	x.loadBasic(t, funcVal, true)
-}
-
-func (x Inverse) loadBasic(t reflect.Type, convFunc reflect.Value, original bool) {
-	x.loadSpecific(t, convFunc)
-
-	fn := func(args []reflect.Value) []reflect.Value {
-		// call actual conversion
-		dstPtr := args[0]
-		args[0] = reflect.New(t)
-		err := convFunc.Call(args)
-
-		// convert to actual output
-		args[1] = args[0].Elem()
-		args[0] = dstPtr
-		convBasic(args)
-
-		return err
-	}
-
-	h := baseOf(t).hash()
-	x.basic[h] = fn
-
-	if original {
-		k := t.Kind()
-		if _, ok := numeric.Types[k]; ok {
-			x.numeric[k] = fn
-		}
-	}
-}
-
-func (x Inverse) loadGeneric(k reflect.Kind, convFunc reflect.Value, maker func(reflect.Value) reflect.Value) {
-	x.generic[k] = func(args []reflect.Value) []reflect.Value {
-		args[0] = maker(args[0].Elem())
-		return convFunc.Call(args)
-	}
-}
-
-func (x Inverse) loadSpecific(t reflect.Type, convFunc reflect.Value) {
-	x.specific[t] = func(args []reflect.Value) []reflect.Value {
-		return convFunc.Call(args)
-	}
-}
-
-// A Scheme is used to package conversions from various source types to a single destination type.
-type Scheme struct {
-	// conversion functions
-	cache    map[reflect.Type]implementation // cache types evaluated at conversion time for rapid subsequent resolution; this is mostly significant for basic conversions
-	specific map[reflect.Type]implementation // specific to certain types
-	generic  map[reflect.Kind]implementation // using generics
-	basic    map[uint64]implementation       // for all types with the same memory structure
-	numeric  map[reflect.Kind]implementation // basic numeric types; subset of basic
-	nilFunc  implementation                  // called when source value is nil
-
-	dstType    reflect.Type
-	dstPtrType reflect.Type
-	evaluator  funcEval // used to check that functions conform to expected signature
-}
-
-// MakeScheme returns an empty Scheme to convert to v's type.
-// Panics if v is nil.
-func MakeScheme(v any) Scheme {
-	dstType := reflect.TypeOf(v)
-	return Scheme{
-		cache:      make(map[reflect.Type]implementation),
-		specific:   make(map[reflect.Type]implementation),
-		generic:    make(map[reflect.Kind]implementation),
-		basic:      make(map[uint64]implementation),
-		numeric:    make(map[reflect.Kind]implementation),
-		nilFunc:    convInvalid,
-		dstType:    dstType,
-		dstPtrType: reflect.PtrTo(dstType),
-		evaluator:  makeFuncEvalScheme(v),
-	}
-}
-
-// Build packages all currently loaded conversion functions into a single function.
-// fn must be a pointer to a function with signature:
-//
-// func(*dstType, any) error
-//
-// where dstType is the same as the one in loaded functions.
-//
-// On successful build, fn can be used to convert to the destination type.
-//
-// If a basic numeric type conversion is defined, all other basic numeric types that can be extrapolated losslesly from them are automatically filled in.
-//
-// For a given srcType, if multiple conversions are available, the order of preference is: specific > generic > basic > closest numeric substitute.
-//
-// Finally, if no explicit conversion has been defined for a particular dstType-srcType pair, but srcType can be implicitly converted (as defined by this package) to dstType, the implicit conversion is used.
-func (x Scheme) Build(fn any) error {
-	x.evaluator.in[1] = emptyType // we explicitly want any input for the packaged function
-	defer func() {
-		x.evaluator.in[1] = nil
-	}()
-
-	v, t, err := x.evaluator.evalRef(fn)
-	if err != nil {
-		return err
-	}
-
-	x.fill()
-
-	// if we end up with no implicit or explicit conversions, we might as well abort
-	// numeric is a subset of basic; no need to check it
-	if len(x.specific) == 0 && len(x.generic) == 0 && len(x.basic) == 0 {
-		return errors.New("empty scheme")
-	}
-
-	var ff func([]reflect.Value) []reflect.Value
-	ff = func(args []reflect.Value) []reflect.Value {
-		if args[1].IsNil() {
-			return x.nilFunc(args)
-		}
-
-		src := args[1].Elem() // arg is seen as any by f
-		args[1] = src
-		srcType := src.Type()
-
-		// check cache first
-		if cache, ok := x.cache[srcType]; ok {
-			return cache(args)
-		}
-
-		// check specific conversions
-		if specific, ok := x.specific[srcType]; ok {
-			x.cache[srcType] = specific
-			return specific(args)
-		}
-
-		// check generic conversions
-		k := src.Kind()
-		kGen := k
-		if _, ok := numeric.Types[kGen]; ok {
-			kGen = reflectNumeric
-		}
-		if generic, ok := x.generic[kGen]; ok {
-			x.cache[srcType] = generic
-			return generic(args)
-		}
-
-		// check basic conversions
-		h := baseOf(srcType).hash()
-		if basic, ok := x.basic[h]; ok {
-			x.cache[srcType] = basic
-			return basic(args)
-		}
-
-		// check numeric substitution
-		if numType, srcIsNum := numeric.Types[k]; srcIsNum {
-			// find the best available substitute
-			var (
-				best       implementation
-				bestRating = -1
-				bestKind   reflect.Kind
-			)
-			for kk, fn := range x.numeric {
-				r := numeric.RateConversion(kk, k)
-				if r >= 0 && (r < bestRating || bestRating == -1) {
-					bestKind = kk
-					bestRating = r
-					best = fn
-				}
-			}
-
-			if bestRating > -1 {
-				bestType := numeric.Types[bestKind]
-				funcType := reflect.FuncOf([]reflect.Type{x.dstPtrType, numType}, []reflect.Type{errorType}, false)
-				convFunc := reflect.MakeFunc(funcType, func(args []reflect.Value) []reflect.Value {
-					bestPtr := reflect.New(bestType)
-					dst := args[0]
-					args[0] = bestPtr
-					convNumeric(args)
-
-					args[1] = bestPtr.Elem()
-					args[0] = dst
-					return best(args)
-				})
-				x.loadBasic(numType, convFunc, false)
-				basic := x.basic[h]
-				x.cache[srcType] = basic
-				return basic(args)
-			} else {
-				x.basic[h] = convInvalid
-			}
-		}
-
-		x.cache[srcType] = convInvalid
-		return convInvalid(args)
-	}
-
-	f := reflect.MakeFunc(t, ff)
-
-	v.Set(f)
-	return nil
-}
-
-// Load registers a function to be used for conversion to a destination type.
-// fn must be a function with signature:
-//
-// func(*dstType, srcType) error
-//
-// If srcType is an undefined simple type, or an undefined composed type of only undefined types, fn will serve as conversion function for all equivalent types.
-// int and uint are treated as equivalent to their respective aliases (int32/int64 and uint32/uint64). Loading one of these types will overwrite its alias.
-//
-// Otherwise, fn will only be used for that specific type.
-// A few special srcTypes are recognized as follows:
-//
-// Array -> generic array conversion
-//
-// Map -> generic map conversion
-//
-// Number -> generic numeric conversion
-//
-// Pointer -> generic pointer conversion
-//
-// Slice -> generic slice conversion
-//
-// Struct -> generic struct conversion
-//
-// Nil -> nil value handling; panics by default
-//
-// Multiple functions may be loaded for the same source type, overwriting the previous one.
-func (x *Scheme) Load(fn any) error {
-	v, t, err := x.evaluator.eval(fn)
-	if err != nil {
-		return err
-	}
-
-	in := t.In(1)
-
-	if in == nilType {
-		x.nilFunc = func(args []reflect.Value) []reflect.Value {
-			args[1] = reflect.ValueOf(Nil{})
-			return v.Call(args)
-		}
-		return nil
-	}
-
-	if isBasic(in) {
-		x.loadBasic(in, v, true)
-		return nil
-	}
-
-	switch in {
-	case arrayType:
-		x.loadGeneric(reflect.Array, v, makeArrayVal)
-	case numericType:
-		x.loadGeneric(reflectNumeric, v, makeNumberVal)
-	case sliceType:
-		x.loadGeneric(reflect.Slice, v, makeSliceVal)
-	case mapType:
-		x.loadGeneric(reflect.Map, v, makeMapVal)
-	case pointerType:
-		x.loadGeneric(reflect.Ptr, v, makePointerVal)
-	case structType:
-		x.loadGeneric(reflect.Struct, v, makeStructVal)
-	default:
-		x.loadSpecific(in, v)
-	}
-
-	return nil
-}
-
-// fill generates the implicit conversion if a suitable basic conversion has not been defined.
-func (x Scheme) fill() {
-	dstBase := baseOf(x.dstType)
-	if !dstBase.isConcrete() {
-		return // cannot implicitly convert if interfaces are involved
-	}
-
-	h := dstBase.hash()
-	if _, ok := x.basic[h]; ok {
-		return // already have explicit basic conversion
-	}
-
-	t := dstBase.asType()
-	funcType := reflect.FuncOf([]reflect.Type{x.dstPtrType, t}, []reflect.Type{errorType}, false)
-	funcVal := reflect.MakeFunc(funcType, convBasic)
-
-	x.loadBasic(t, funcVal, true)
-}
-
-// if original is true, will remember the conversion as an original conversion for the purpose of numeric conversions. This is to avoid indirect conversion chains.
-func (x Scheme) loadBasic(t reflect.Type, convFunc reflect.Value, original bool) {
-	x.loadSpecific(t, convFunc) // bypass intermediary conversion for the basic type itself
-
-	fn := func(args []reflect.Value) []reflect.Value {
-		// convert to basic type
-		srcPtr := reflect.New(t)
-		dstPtr := args[0]
-		args[0] = srcPtr
-		convBasic(args)
-
-		// call actual conversion
-		args[1] = srcPtr.Elem()
-		args[0] = dstPtr
-		return convFunc.Call(args)
-	}
-
-	h := baseOf(t).hash()
-	x.basic[h] = fn
-
-	if original {
-		k := t.Kind()
-		if _, ok := numeric.Types[k]; ok {
-			x.numeric[k] = fn
-		}
-	}
-}
-
-func (x Scheme) loadGeneric(k reflect.Kind, convFunc reflect.Value, maker func(reflect.Value) reflect.Value) {
-	x.generic[k] = func(args []reflect.Value) []reflect.Value {
-		args[1] = maker(args[1])
-		return convFunc.Call(args)
-	}
-}
-
-func (x Scheme) loadSpecific(t reflect.Type, convFunc reflect.Value) {
-	x.specific[t] = func(args []reflect.Value) []reflect.Value {
-		return convFunc.Call(args)
-	}
-}
-
-// funcVal returns a function value from v.
-// v must be a function or point to one.
-func funcVal(v any) (reflect.Value, error) {
-	if v == nil {
-		return reflect.Value{}, errors.New("nil input")
-	}
-
-	o := reflect.Indirect(reflect.ValueOf(v))
-	if o.Kind() != reflect.Func {
-		return reflect.Value{}, errors.New("non-function input")
-	}
-
-	return o, nil
-}
-
-// funcRefVal is like valFunc, but also checks that the function value be settable.
-func funcRefVal(v any) (reflect.Value, error) {
-	o, err := funcVal(v)
-	if err != nil {
+		var o S
 		return o, err
 	}
-
-	if !o.CanSet() {
-		return reflect.Value{}, errors.New("non-settable input")
-	}
-
-	return o, nil
+	return ov.Interface().(S), nil
 }
 
-type funcEvalSide int
+// A Scheme is a collection of Builders to be used together.
+// Each member will be called sequentially, in the order they were added, until one return true.
+type Scheme[T any] []Builder[T]
 
-func (x funcEvalSide) String() string {
-	switch x {
-	case funcEvalIn:
-		return "input"
-	case funcEvalOut:
-		return "output"
-	}
-	return ""
-}
-
-const (
-	funcEvalIn funcEvalSide = iota
-	funcEvalOut
-)
-
-// A funcEval is used to examine function values, ensuring they conform to certain requirements.
-// in and out should hold desired input and output types.
-// The generic types defined in this package may be used as stand-ins for any type of those respective kinds.
-// A nil element is interpreted as any type being valid.
-type funcEval struct {
-	in  []reflect.Type
-	out []reflect.Type
-}
-
-// makeFuncEvalInverse returns a funcEval for a conversion function from v's type.
-func makeFuncEvalInverse(v any) funcEval {
-	return funcEval{
-		in:  []reflect.Type{pointerType, reflect.TypeOf(v)},
-		out: []reflect.Type{errorType},
-	}
-}
-
-// makeFuncEvalScheme returns a funcEval for a conversion function to v's type.
-func makeFuncEvalScheme(v any) funcEval {
-	return funcEval{
-		in:  []reflect.Type{reflect.PtrTo(reflect.TypeOf(v)), nil},
-		out: []reflect.Type{errorType},
-	}
-}
-
-func (x funcEval) checkType(t reflect.Type, side funcEvalSide) error {
-	var (
-		want []reflect.Type
-		get  func(int) reflect.Type
-		num  int
-	)
-	switch side {
-	case funcEvalIn:
-		want = x.in
-		get = t.In
-		num = t.NumIn()
-	case funcEvalOut:
-		want = x.out
-		get = t.Out
-		num = t.NumOut()
-	}
-
-	if want == nil {
-		return nil
-	}
-
-	if num != len(want) {
-		return fmt.Errorf("expected function with %v %vs", num, side)
-	}
-
-	for i, v := range want {
-		var k reflect.Kind
-
-		switch v {
-		case nil:
-			continue
-		case mapType:
-			k = reflect.Map
-		case pointerType:
-			k = reflect.Ptr
-		case sliceType:
-			k = reflect.Slice
-		case structType:
-			k = reflect.Struct
+func (x Scheme[T]) Build(t Type) (T, bool) {
+	for _, b := range x {
+		if o, ok := b(t); ok {
+			return o, true
 		}
+	}
+	var o T
+	return o, false
+}
 
-		typ := get(i)
-		if k == reflect.Invalid {
-			if typ != v {
-				return fmt.Errorf("expected %v #%v to be %v", side, i, v)
+func (x *Scheme[T]) Use(b Builder[T]) {
+	*x = append(*x, b)
+}
+
+// Check applies "fn" recursively to composite types.
+// Returns on the first false.
+func Check(t Type, fn func(Type) bool) bool {
+	if !fn(t) {
+		return false
+	}
+
+	switch t.Kind() {
+	case Array, Chan, Pointer, Slice:
+		return fn(t.Elem())
+	case Map:
+		if !fn(t.Key()) {
+			return false
+		}
+		return fn(t.Elem())
+	case Struct:
+		for i, n := 0, t.NumField(); i < n; i++ {
+			if !fn(t.Field(i).Type) {
+				return false
 			}
-		} else {
-			if typ.Kind() != k {
-				return fmt.Errorf("expected %v #%v to be %v type", side, i, k)
+		}
+	case Func:
+		for i, n := 0, t.NumIn(); i < n; i++ {
+			if !fn(t.In(i)) {
+				return false
+			}
+		}
+		for i, n := 0, t.NumOut(); i < n; i++ {
+			if !fn(t.Out(i)) {
+				return false
 			}
 		}
 	}
 
-	return nil
+	return true
 }
 
-func (x funcEval) eval(v any) (reflect.Value, reflect.Type, error) {
-	return x.evalWith(v, funcVal)
+// TypeEval returns the reflect.Type of a generic T.
+func TypeEval[T any]() Type {
+	return TypeOf((*T)(nil)).Elem()
 }
 
-func (x funcEval) evalRef(v any) (reflect.Value, reflect.Type, error) {
-	return x.evalWith(v, funcRefVal)
+func converterInvalid[T any](v Value) (T, error) {
+	var o T
+	return o, ErrInvalid
 }
 
-func (x funcEval) evalValue(v reflect.Value) (reflect.Type, error) {
-	t := v.Type()
-
-	if err := x.checkType(t, funcEvalIn); err != nil {
-		return nil, err
-	}
-	if err := x.checkType(t, funcEvalOut); err != nil {
-		return nil, err
-	}
-
-	return t, nil
+func inverterInvalid[T any](v T) (Value, error) {
+	return Value{}, ErrInvalid
 }
 
-func (x funcEval) evalWith(v any, check func(any) (reflect.Value, error)) (reflect.Value, reflect.Type, error) {
-	oval, err := check(v)
-	if err != nil {
-		return reflect.Value{}, nil, err
+/*
+func Implicit(tIn, tOut Type) (Converter, bool) {
+	if tIn.AssignableTo(tOut) {
+		return func(v Value) (Value, error) {
+			o := New(tOut).Elem()
+			o.Set(v)
+			return o, nil
+		}, true
 	}
 
-	otyp, err := x.evalValue(oval)
-	if err != nil {
-		return reflect.Value{}, nil, err
+	if tIn.ConvertibleTo(tOut) {
+		return func(v Value) (Value, error) {
+			o := v.Convert(tOut)
+			return o, nil
+		}, true
 	}
 
-	return oval, otyp, nil
-}
-
-var (
-	arrayType   = reflect.TypeOf(Array{})
-	emptyType   = reflect.TypeOf(new(any)).Elem()
-	errorType   = reflect.TypeOf(new(error)).Elem()
-	mapType     = reflect.TypeOf(Map{})
-	nilType     = reflect.TypeOf(Nil{})
-	numericType = reflect.TypeOf(Number{})
-	pointerType = reflect.TypeOf(Pointer{})
-	sliceType   = reflect.TypeOf(Slice{})
-	structType  = reflect.TypeOf(Struct{})
-
-	simpleTypes = make(map[reflect.Kind]reflect.Type) // types corresponding to simple kinds (int, bool etc.)
-)
-
-func init() {
-	for k, t := range numeric.Types {
-		simpleTypes[k] = t
-	}
-	simpleTypes[reflect.Bool] = reflect.TypeOf(false)
-	simpleTypes[reflect.String] = reflect.TypeOf("")
-	simpleTypes[reflect.UnsafePointer] = reflect.TypeOf(new(unsafe.Pointer)).Elem()
-}
-
-// convBasic converts args[1] to args[0] through direct pointer reinterpretation
-func convBasic(args []reflect.Value) []reflect.Value {
-	// we need to make src addressable
-	if !args[1].CanAddr() {
-		srcPtr := reflect.New(args[1].Type())
-		srcTmp := srcPtr.Elem()
-		srcTmp.Set(args[1])
-		args[1] = srcTmp
+	// check here, because the standard Go logic should already cover most common cases
+	if !canImplicit(tIn, tOut) {
+		return nil, false
 	}
 
-	// reinterpret src
-	dst := args[0].Elem()
-	dstPtr := reflect.NewAt(dst.Type(), unsafe.Pointer(args[1].UnsafeAddr()))
-	dst.Set(dstPtr.Elem())
+	switch tIn.Kind() {
+	case Func, Pointer:
+		// can directly get unsafe.Pointer of these types
+		return func(v Value) (Value, error) {
+			ptr := v.UnsafePointer()
+			o := NewAt(tOut, ptr).Elem()
+			return o, nil
+		}, true
+	}
 
-	return []reflect.Value{errValNone}
+	// unaddressable types must be copied
+	return func(v Value) (Value, error) {
+		oPtr := New(tIn)
+		oPtr.Elem().Set(v)
+		ptr := oPtr.UnsafePointer()
+		o := NewAt(tOut, ptr).Elem()
+		return o, nil
+	}, true
 }
 
-// convInvalid returns the invalid conversion error
-func convInvalid([]reflect.Value) []reflect.Value {
-	return []reflect.Value{errValInvalid}
+// canImplicit returns true if tIn and tOut share the same memory representation
+func canImplicit(tIn, tOut Type) bool {
+	k := tIn.Kind()
+	if k == Interface {
+		return false
+	}
+	if k != tOut.Kind() {
+		return false
+	}
+
+	switch k {
+	case Array:
+		if tIn.Len() != tOut.Len() {
+			return false
+		}
+		return canImplicit(tIn.Elem(), tOut.Elem())
+	case Chan:
+		if tIn.ChanDir() != tOut.ChanDir() {
+			return false
+		}
+		return canImplicit(tIn.Elem(), tOut.Elem())
+	case Func:
+		nIn := tIn.NumIn()
+		nOut := tIn.NumOut()
+		if nIn != tOut.NumIn() || nOut != tOut.NumOut() {
+			return false
+		}
+		for i := 0; i < nIn; i++ {
+			if !canImplicit(tIn.In(i), tOut.In(i)) {
+				return false
+			}
+		}
+		for i := 0; i < nOut; i++ {
+			if !canImplicit(tIn.Out(i), tOut.Out(i)) {
+				return false
+			}
+		}
+	case Map:
+		if !canImplicit(tIn.Key(), tOut.Key()) {
+			return false
+		}
+		fallthrough
+	case Pointer:
+		fallthrough
+	case Slice:
+		return canImplicit(tIn.Elem(), tOut.Elem())
+	case Struct:
+		n := tIn.NumField()
+		if n != tOut.NumField() {
+			return false
+		}
+		for i := 0; i < n; i++ {
+			if !canImplicit(tIn.Field(i).Type, tOut.Field(i).Type) {
+				return false
+			}
+		}
+	}
+
+	return true
 }
-
-// convNumeric wraps numeric.Convert
-func convNumeric(args []reflect.Value) []reflect.Value {
-	return numericFunc.Call(args)
-}
-
-type implementation = func([]reflect.Value) []reflect.Value
-
-var numericFunc = reflect.ValueOf(numeric.Convert)
-
-var (
-	ErrInvalid    = errors.New("invalid conversion")
-	errValInvalid = reflect.ValueOf(ErrInvalid)
-	errValNone    = reflect.Zero(errorType)
-)
+*/
