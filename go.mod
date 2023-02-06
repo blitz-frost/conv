@@ -1,3 +1,3 @@
 module github.com/blitz-frost/conv
 
-go 1.19
+go 1.20
