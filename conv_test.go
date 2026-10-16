@@ -30,7 +30,7 @@ func TestConversion(t *testing.T) {
 	scheme := Scheme[Converter[int]]{}
 	scheme.Use(b)
 	scheme.Use(bb)
-	c := NewConversion(scheme.Build)
+	c := ConversionMake(scheme.Build)
 
 	type someInt int
 	aInt := someInt(44)
@@ -70,15 +70,15 @@ func TestInversion(t *testing.T) {
 	scheme := Scheme[Inverter[int]]{}
 	scheme.Use(b)
 	scheme.Use(bb)
-	c := NewInversion(scheme.Build)
+	c := InversionMake(scheme.Build)
 
 	type someInt int
-	bInt, err := As[someInt, int](c, 44)
+	bInt, err := Invert[someInt](&c, 44)
 	if err != nil || bInt != 44 {
 		t.Error("int failed", err)
 	}
 
-	bSlice, err := As[[]int, int](c, 44)
+	bSlice, err := Invert[[]int](&c, 44)
 	if err != nil || len(bSlice) != 1 || bSlice[0] != 44 {
 		t.Error("slice failed", err)
 	}

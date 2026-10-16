@@ -6,12 +6,13 @@
 package conv
 
 import (
-	"errors"
 	. "reflect"
 	"sync"
+
+	"github.com/blitz-frost/errors"
 )
 
-var ErrInvalid = errors.New("invalid conversion")
+var ErrInvalid = errors.Simple("invalid conversion")
 
 // A Builder is used to obtain conversion functions for a particular type. It must return false if it cannot handle the input type.
 // Multiple Builders should be used together, each one covering a different case, making code more modular.
@@ -37,8 +38,8 @@ type Library[T any] struct {
 }
 
 // "zero" will be used as default when the wrapped builder doesn't cover a particular type.
-func NewLibrary[T any](b Builder[T], zero T) *Library[T] {
-	return &Library[T]{
+func LibraryMake[T any](b Builder[T], zero T) Library[T] {
+	return Library[T]{
 		m:    make(map[Type]T),
 		b:    b,
 		zero: zero,
@@ -78,8 +79,8 @@ func (x *Library[T]) Get(t Type) T {
 // Users can define their own Converter and Conversion variants, if the standard ones don't suit needs.
 type Conversion[T any] Library[Converter[T]]
 
-func NewConversion[T any](b Builder[Converter[T]]) *Conversion[T] {
-	return (*Conversion[T])(NewLibrary[Converter[T]](b, converterInvalid[T]))
+func ConversionMake[T any](b Builder[Converter[T]]) Conversion[T] {
+	return Conversion[T](LibraryMake(b, converterInvalid[T]))
 }
 
 func (x *Conversion[T]) Call(v any) (T, error) {
@@ -90,13 +91,12 @@ func (x *Conversion[T]) Call(v any) (T, error) {
 // A Inversion is a Library specialized in standard Inverter functions (from one specific type to multiple others).
 type Inversion[T any] Library[Inverter[T]]
 
-func NewInversion[T any](b Builder[Inverter[T]]) *Inversion[T] {
-	return (*Inversion[T])(NewLibrary[Inverter[T]](b, inverterInvalid[T]))
+func InversionMake[T any](b Builder[Inverter[T]]) Inversion[T] {
+	return Inversion[T](LibraryMake(b, inverterInvalid[T]))
 }
 
-// As is the equivalent of the Conversion.Call method, but Go methods cannot currently take type parameters.
-func As[S any, T any](x *Inversion[T], v T) (S, error) {
-	t := TypeOf((*S)(nil)).Elem()
+func Invert[S, T any](x *Inversion[T], v T) (S, error) {
+	t := TypeFor[S]()
 	f := (*Library[Inverter[T]])(x).Get(t)
 	ov, err := f(v)
 	if err != nil {
@@ -159,11 +159,6 @@ func Check(t Type, fn func(Type) bool) bool {
 	}
 
 	return true
-}
-
-// TypeEval returns the reflect.Type of a generic T.
-func TypeEval[T any]() Type {
-	return TypeOf((*T)(nil)).Elem()
 }
 
 func converterInvalid[T any](v Value) (T, error) {
